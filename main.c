@@ -1,15 +1,23 @@
-#import <Foundation/Foundation.h>
-#import <CommonCrypto/CommonCrypto.h>
-
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <fcntl.h>
+#include <libgen.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
+
+#ifdef __APPLE__
+#include <CommonCrypto/CommonCrypto.h>
+#define SHA256  CC_SHA256
+#define SHA256_(x)  CC_SHA256_##x
+#else
+#include <openssl/sha.h>
+#define SHA256_(x)  SHA256_##x
+#endif
 
 #if DEBUG==1
 #define LOG printf
@@ -17,9 +25,9 @@
 #define LOG
 #endif
 
-CC_SHA256_CTX g_hash_ctx;
+SHA256_(CTX) g_hash_ctx;
 
-uint8_t g_macho_hash[CC_SHA256_DIGEST_LENGTH]={0};
+uint8_t g_macho_hash[SHA256_(DIGEST_LENGTH)]={0};
 
 int processSlice(int fd, void* slice)
 {
@@ -77,20 +85,19 @@ int processSlice(int fd, void* slice)
     
     LOG("cpusubtype=%X start=%llX size=%lX\n", header->cpusubtype, (uint64_t)start_address-(uint64_t)header, valid_data_size);
     
-    CC_SHA256_Update(&g_hash_ctx, start_address, (CC_LONG)valid_data_size);
+    SHA256_(Update)(&g_hash_ctx, start_address, valid_data_size);
     
     
 #if DEBUG==1
     //test
-    uint8_t slice_hash[CC_SHA256_DIGEST_LENGTH]={0};
-    CC_SHA256(start_address, (CC_LONG)valid_data_size, slice_hash);
+    uint8_t slice_hash[SHA256_(DIGEST_LENGTH)]={0};
+    SHA256(start_address, valid_data_size, slice_hash);
     
-    NSMutableString *hashString = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
-    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
-        [hashString appendFormat:@"%02x", slice_hash[i]];
+    LOG("*** slice hash:");
+    for (int i = 0; i < SHA256_(DIGEST_LENGTH); i++) {
+        LOG("%02x", slice_hash[i]);
     }
-    
-    LOG("*** slice hash:%s\n", hashString.UTF8String);
+    LOG("\n");
 #endif
     
     return 0;
@@ -124,9 +131,9 @@ int processMachO(const char* file)
     if(magic==FAT_MAGIC || magic==FAT_CIGAM) {
         struct fat_header* fathdr = (struct fat_header*)macho;
         struct fat_arch* archdr = (struct fat_arch*)((uint64_t)fathdr + sizeof(*fathdr));
-        int count = magic==FAT_MAGIC ? fathdr->nfat_arch : OSSwapInt32(fathdr->nfat_arch);
+        int count = magic==FAT_MAGIC ? fathdr->nfat_arch : __builtin_bswap32(fathdr->nfat_arch);
         for(int i=0; i<count; i++) {
-            uint32_t offset = (magic==FAT_MAGIC ? archdr[i].offset : OSSwapInt32(archdr[i].offset));
+            uint32_t offset = (magic==FAT_MAGIC ? archdr[i].offset : __builtin_bswap32(archdr[i].offset));
             if(processSlice(fd, (void*)((uint64_t)macho + offset)) < 0) {
                 munmap(macho, st.st_size);
                 close(fd);
@@ -136,9 +143,9 @@ int processMachO(const char* file)
     } else if(magic==FAT_MAGIC_64 || magic==FAT_CIGAM_64) {
         struct fat_header* fathdr = (struct fat_header*)macho;
         struct fat_arch_64* archdr = (struct fat_arch_64*)((uint64_t)fathdr + sizeof(*fathdr));
-        int count = magic==FAT_MAGIC_64 ? fathdr->nfat_arch : OSSwapInt32(fathdr->nfat_arch);
+        int count = magic==FAT_MAGIC_64 ? fathdr->nfat_arch : __builtin_bswap32(fathdr->nfat_arch);
         for(int i=0; i<count; i++) {
-            uint64_t offset = (magic==FAT_MAGIC_64 ? archdr[i].offset : OSSwapInt64(archdr[i].offset));
+            uint64_t offset = (magic==FAT_MAGIC_64 ? archdr[i].offset : __builtin_bswap64(archdr[i].offset));
             if(processSlice(fd, (void*)((uint64_t)macho + offset)) < 0) {
                 munmap(macho, st.st_size);
                 close(fd);
@@ -166,7 +173,7 @@ int processMachO(const char* file)
 int main(int argc, const char * argv[]) {
     
     if(argc != 2) {
-        printf("Calculate macho file hash (compatible with roothide).\nUsage: %s /path/to/macho\n", getprogname());
+        printf("Calculate macho file hash (compatible with roothide).\nUsage: %s /path/to/macho\n", basename((char*)argv[0]));
         return 0;
     }
 
@@ -174,25 +181,20 @@ int main(int argc, const char * argv[]) {
 
     LOG("calc hash for %s\n", target);
     
-    CC_SHA256_Init(&g_hash_ctx);
+    SHA256_(Init)(&g_hash_ctx);
     
     if(processMachO(target) < 0) {
         fprintf(stderr, "processTarget error!\n");
         return -1;
     }
     
-    CC_SHA256_Final(g_macho_hash, &g_hash_ctx);
-
-    NSMutableString *hashString = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
-    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
-        [hashString appendFormat:@"%02x", g_macho_hash[i]];
+    SHA256_(Final)(g_macho_hash, &g_hash_ctx);
+    
+    LOG("****** macho file hash:");
+    for (int i = 0; i < SHA256_(DIGEST_LENGTH); i++) {
+        fprintf(stdout, "%02x", g_macho_hash[i]);
     }
-    
-    LOG("****** macho file hash:\n\n");
-    
-    fprintf(stdout, "%s", hashString.UTF8String);
-    
-    LOG("\n\n\n");
+    LOG("\n");
     
     return 0;
 }
