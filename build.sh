@@ -7,6 +7,7 @@ if [ $(uname -s) != "Darwin" ]; then
 
     SSL_CFLAGS=$(pkg-config --cflags openssl)
     SSL_LDFLAGS=$(pkg-config --libs openssl)
+    # SSL_CFLAGS may be empty
     if [ -z "$SSL_LDFLAGS" ]; then
         echo "OpenSSL development files not found. Please install libssl-dev."
         exit 1
@@ -21,11 +22,11 @@ if [ $(uname -s) != "Darwin" ]; then
         echo "The non-darwin headers are not present in the ld64 repository."
     fi
 
-    EXTRA_HEADER_FLAG="-I./ld64/EXTERNAL_HEADERS/non-darwin $SSL_CFLAGS $SSL_LDFLAGS"
+    EXTRA_FLAGS="-I./ld64/EXTERNAL_HEADERS/non-darwin $SSL_CFLAGS $SSL_LDFLAGS"
 fi
 
 echo "*** Building the hashmacho executable ..."
-clang -v $EXTRA_HEADER_FLAG -o hashmacho main.c
+clang -v $EXTRA_FLAGS -o hashmacho main.c
 
 echo "*** Checking built hashmacho executable ..."
 chmod +x ./hashmacho && ./hashmacho
